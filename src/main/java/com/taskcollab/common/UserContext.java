@@ -1,0 +1,41 @@
+package com.taskcollab.common;
+
+public class UserContext {
+    private static final ThreadLocal<Long> USER_ID = new ThreadLocal<>();
+    private static final ThreadLocal<String> USER_NAME = new ThreadLocal<>();
+    private static final ThreadLocal<String> USER_ROLE = new ThreadLocal<>();
+
+    public static void setUserId(Long userId) {
+        USER_ID.set(userId);
+    }
+
+    public static Long getUserId() {
+        return USER_ID.get();
+    }
+
+    public static void setUserName(String userName) {
+        USER_NAME.set(userName);
+    }
+
+    public static String getUserName() {
+        return USER_NAME.get();
+    }
+
+    public static void setUserRole(String userRole) {
+        USER_ROLE.set(userRole);
+    }
+
+    public static String getUserRole() {
+        return USER_ROLE.get();
+    }
+
+    public static void clear() {
+        USER_ID.remove();
+        USER_NAME.remove();
+        USER_ROLE.remove();
+    }
+
+    public static boolean isLeader() {
+        return "LEADER".equals(getUserRole()) || "ADMIN".equals(getUserRole());
+    }
+}
