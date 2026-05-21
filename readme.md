@@ -32,6 +32,7 @@ task-collaboration/
 │       │   ├── common/                              # 公共类
 │       │   │   ├── Result.java                      # 统一返回结果
 │       │   │   ├── TaskStatus.java                  # 任务状态常量
+│       │   │   ├── TaskStateMachine.java            # 状态机（统一状态流转）
 │       │   │   └── UserContext.java                 # 用户上下文
 │       │   ├── config/                              # 配置类
 │       │   │   ├── MybatisPlusConfig.java           # MyBatis-Plus配置
@@ -80,6 +81,7 @@ task-collaboration/
    - `acceptPass()` - 验收通过
    - `acceptReject()` - 验收驳回
    - `getKanban()` - 获取看板数据
+   - `dragUpdateStatus()` - 看板拖拽更新状态（受状态机和权限双重控制）
 
 2. **权限控制**:
    - 负责人/管理员: 创建任务、修改任务、分配执行人、查看全部任务、验收处理
