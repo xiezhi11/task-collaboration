@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { getCurrentUser } from './storage'
 
 const service = axios.create({
   baseURL: '/api',
@@ -8,7 +9,7 @@ const service = axios.create({
 
 service.interceptors.request.use(
   (config) => {
-    const user = JSON.parse(localStorage.getItem('currentUser') || '{}')
+    const user = getCurrentUser() || {}
     if (user.userId) {
       config.headers['X-User-Id'] = user.userId
       config.headers['X-Username'] = user.username

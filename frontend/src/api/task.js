@@ -90,3 +90,11 @@ export function getOperationLogs(taskId) {
     method: 'get'
   })
 }
+
+export function dragUpdateStatus(data) {
+  return request({
+    url: '/tasks/drag',
+    method: 'post',
+    data
+  })
+}

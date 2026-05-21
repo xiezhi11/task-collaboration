@@ -193,6 +193,7 @@ import {
   acceptReject
 } from '../api/task'
 import { getUserList } from '../api/auth'
+import { getCurrentUser } from '../utils/storage'
 import dayjs from 'dayjs'
 
 const route = useRoute()
@@ -204,7 +205,7 @@ const operationLogs = ref([])
 const rejectRecords = ref([])
 const users = ref([])
 
-const currentUser = computed(() => JSON.parse(localStorage.getItem('currentUser') || '{}'))
+const currentUser = computed(() => getCurrentUser() || {})
 const isLeader = computed(() => currentUser.value.role === 'LEADER' || currentUser.value.role === 'ADMIN')
 
 const canPublish = computed(() => {

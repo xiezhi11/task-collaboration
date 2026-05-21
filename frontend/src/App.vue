@@ -52,18 +52,19 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getUserList, login } from './api/auth'
+import { getCurrentUser } from './utils/storage'
 
 const router = useRouter()
 const users = ref([])
-const currentUser = ref(null)
+const currentUser = ref(getCurrentUser())
 
 onMounted(async () => {
   try {
     const res = await getUserList()
     if (res.code === 200) {
       users.value = res.data
-      if (users.value.length > 0) {
-        switchUser(users.value[0])
+      if (!currentUser.value && users.value.length > 0) {
+        await switchUser(users.value[0], false)
       }
     }
   } catch (e) {
@@ -71,14 +72,16 @@ onMounted(async () => {
   }
 })
 
-const switchUser = async (user) => {
+const switchUser = async (user, reload = true) => {
   try {
     const res = await login(user.username)
     if (res.code === 200) {
       currentUser.value = res.data
       localStorage.setItem('currentUser', JSON.stringify(res.data))
       ElMessage.success(`已切换到用户: ${res.data.name}`)
-      router.go(0)
+      if (reload) {
+        router.go(0)
+      }
     } else {
       ElMessage.error(res.message)
     }

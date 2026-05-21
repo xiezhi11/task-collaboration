@@ -191,6 +191,7 @@ import { ElMessage } from 'element-plus'
 import { STATUS_TEXT, STATUS_COLOR, PRIORITY_TEXT } from '../utils/constants'
 import { queryTasks, createTask, assignTask, updateProgress, publishTask } from '../api/task'
 import { getUserList } from '../api/auth'
+import { getCurrentUser } from '../utils/storage'
 
 const router = useRouter()
 const loading = ref(false)
@@ -198,7 +199,7 @@ const tableData = ref([])
 const total = ref(0)
 const users = ref([])
 
-const currentUser = computed(() => JSON.parse(localStorage.getItem('currentUser') || '{}'))
+const currentUser = computed(() => getCurrentUser() || {})
 const isLeader = computed(() => currentUser.value.role === 'LEADER' || currentUser.value.role === 'ADMIN')
 
 const queryForm = reactive({
