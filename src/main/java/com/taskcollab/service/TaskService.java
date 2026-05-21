@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.taskcollab.common.Result;
+import com.taskcollab.common.TaskStateMachine;
 import com.taskcollab.common.TaskStatus;
 import com.taskcollab.common.UserContext;
 import com.taskcollab.dto.TaskAcceptDTO;
 import com.taskcollab.dto.TaskCreateDTO;
+import com.taskcollab.dto.TaskDragDTO;
 import com.taskcollab.dto.TaskProgressDTO;
 import com.taskcollab.dto.TaskQueryDTO;
 import com.taskcollab.dto.TaskUpdateDTO;
@@ -37,6 +39,9 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
 
     @Autowired
     private TaskRejectRecordService rejectRecordService;
+
+    @Autowired
+    private TaskStateMachine stateMachine;
 
     @Transactional
     public Result<Task> createTask(TaskCreateDTO dto) {
@@ -88,20 +93,19 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (!UserContext.isLeader() && !task.getCreatorId().equals(UserContext.getUserId())) {
+        if (!isTaskCreatorOrLeader(task)) {
             return Result.error("只有负责人或管理员可以发布任务");
         }
 
-        if (!TaskStatus.DRAFT.equals(task.getTaskStatus())) {
-            return Result.error("只有草稿状态的任务可以发布");
+        if (!stateMachine.canPublish(task)) {
+            return Result.error("只有草稿状态的任务可以发布，当前状态：" + stateMachine.getStatusText(task.getTaskStatus()));
         }
 
         String oldStatus = task.getTaskStatus();
-        String newStatus = task.getExecutorId() != null ? TaskStatus.PENDING_START : TaskStatus.PENDING_ASSIGN;
-        task.setTaskStatus(newStatus);
-        updateById(task);
+        String newStatus = stateMachine.getNextStatusAfterPublish(task);
 
-        operationLogService.logOperation(taskId, "PUBLISH", "发布任务", oldStatus, newStatus);
+        stateMachine.transitionStatus(task, "PUBLISH", "发布任务", oldStatus, newStatus);
+        updateById(task);
 
         return Result.success(task);
     }
@@ -113,12 +117,12 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (!UserContext.isLeader() && !task.getCreatorId().equals(UserContext.getUserId())) {
+        if (!isTaskCreatorOrLeader(task)) {
             return Result.error("只有负责人或管理员可以分配任务");
         }
 
-        if (TaskStatus.COMPLETED.equals(task.getTaskStatus())) {
-            return Result.error("已完成的任务不能重新分配");
+        if (!stateMachine.canAssign(task)) {
+            return Result.error("当前状态不允许分配任务，当前状态：" + stateMachine.getStatusText(task.getTaskStatus()));
         }
 
         SysUser executor = sysUserService.getById(executorId);
@@ -132,16 +136,13 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
         task.setExecutorId(executor.getId());
         task.setExecutorName(executor.getName());
 
-        if (TaskStatus.PENDING_ASSIGN.equals(task.getTaskStatus())) {
-            task.setTaskStatus(TaskStatus.PENDING_START);
-        }
-
-        updateById(task);
-
+        String newStatus = stateMachine.getNextStatusAfterAssign(task);
         String content = oldExecutor != null
                 ? "重新分配任务：从 " + oldExecutor + " 改为 " + executor.getName()
                 : "分配任务给 " + executor.getName();
-        operationLogService.logOperation(taskId, "ASSIGN", content, oldStatus, task.getTaskStatus());
+
+        stateMachine.transitionStatus(task, "ASSIGN", content, oldStatus, newStatus);
+        updateById(task);
 
         return Result.success(task);
     }
@@ -153,16 +154,19 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (task.getExecutorId() == null || !task.getExecutorId().equals(UserContext.getUserId())) {
+        if (!isTaskExecutor(task)) {
             return Result.error("只有任务执行人可以更新进度");
         }
 
-        if (TaskStatus.COMPLETED.equals(task.getTaskStatus())) {
-            return Result.error("已完成的任务不能修改进度");
-        }
-
-        if (TaskStatus.PENDING_ACCEPT.equals(task.getTaskStatus())) {
-            return Result.error("待验收状态的任务不能修改进度，请等待验收结果或被驳回后再修改");
+        if (!stateMachine.canUpdateProgress(task)) {
+            String statusText = stateMachine.getStatusText(task.getTaskStatus());
+            if (TaskStatus.COMPLETED.equals(task.getTaskStatus())) {
+                return Result.error("已完成的任务不能修改进度");
+            }
+            if (TaskStatus.PENDING_ACCEPT.equals(task.getTaskStatus())) {
+                return Result.error("待验收状态的任务不能修改进度，请等待验收结果或被驳回后再修改");
+            }
+            return Result.error("当前状态不允许修改进度，当前状态：" + statusText);
         }
 
         if (dto.getProgress() < 0 || dto.getProgress() > 100) {
@@ -172,18 +176,20 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
         Integer oldProgress = task.getProgress();
         task.setProgress(dto.getProgress());
 
-        if (TaskStatus.PENDING_START.equals(task.getTaskStatus()) && dto.getProgress() > 0) {
-            task.setTaskStatus(TaskStatus.IN_PROGRESS);
-        } else if (TaskStatus.REJECTED.equals(task.getTaskStatus())) {
-            task.setTaskStatus(TaskStatus.IN_PROGRESS);
+        String oldStatus = task.getTaskStatus();
+        String newStatus = stateMachine.getNextStatusAfterProgressUpdate(task, dto.getProgress());
+
+        if (!oldStatus.equals(newStatus)) {
+            stateMachine.transitionStatus(task, "UPDATE_PROGRESS",
+                    "更新进度：从 " + oldProgress + "% 到 " + dto.getProgress() + "%",
+                    oldStatus, newStatus);
+        } else {
+            operationLogService.logOperation(task.getId(), "UPDATE_PROGRESS",
+                    "更新进度：从 " + oldProgress + "% 到 " + dto.getProgress() + "%",
+                    null, null);
         }
 
         updateById(task);
-
-        operationLogService.logOperation(task.getId(), "UPDATE_PROGRESS",
-                "更新进度：从 " + oldProgress + "% 到 " + dto.getProgress() + "%",
-                null, null);
-
         return Result.success(task);
     }
 
@@ -194,7 +200,7 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (task.getExecutorId() == null || !task.getExecutorId().equals(UserContext.getUserId())) {
+        if (!isTaskExecutor(task)) {
             return Result.error("只有任务执行人可以提交验收");
         }
 
@@ -206,15 +212,19 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务已在待验收状态，请勿重复提交");
         }
 
-        if (task.getProgress() < 100) {
-            return Result.error("任务进度必须达到100%才能提交验收，当前进度：" + task.getProgress() + "%");
+        if (task.getProgress() == null || task.getProgress() < 100) {
+            return Result.error("任务进度必须达到100%才能提交验收，当前进度：" + (task.getProgress() != null ? task.getProgress() : 0) + "%");
+        }
+
+        if (!stateMachine.canSubmitAccept(task)) {
+            return Result.error("当前状态不允许提交验收，当前状态：" + stateMachine.getStatusText(task.getTaskStatus()));
         }
 
         String oldStatus = task.getTaskStatus();
-        task.setTaskStatus(TaskStatus.PENDING_ACCEPT);
-        updateById(task);
+        String newStatus = stateMachine.getNextStatusAfterSubmitAccept();
 
-        operationLogService.logOperation(taskId, "SUBMIT_ACCEPT", "提交验收", oldStatus, TaskStatus.PENDING_ACCEPT);
+        stateMachine.transitionStatus(task, "SUBMIT_ACCEPT", "提交验收", oldStatus, newStatus);
+        updateById(task);
 
         return Result.success(task);
     }
@@ -226,20 +236,20 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (!UserContext.isLeader() && !task.getCreatorId().equals(UserContext.getUserId())) {
+        if (!isTaskCreatorOrLeader(task)) {
             return Result.error("只有负责人或管理员可以验收任务");
         }
 
-        if (!TaskStatus.PENDING_ACCEPT.equals(task.getTaskStatus())) {
-            return Result.error("只有待验收状态的任务可以验收通过");
+        if (!stateMachine.canAcceptPass(task)) {
+            return Result.error("只有待验收状态的任务可以验收通过，当前状态：" + stateMachine.getStatusText(task.getTaskStatus()));
         }
 
         String oldStatus = task.getTaskStatus();
-        task.setTaskStatus(TaskStatus.COMPLETED);
-        task.setAcceptResult("PASS");
-        updateById(task);
+        String newStatus = stateMachine.getNextStatusAfterAcceptPass();
 
-        operationLogService.logOperation(taskId, "ACCEPT_PASS", "验收通过", oldStatus, TaskStatus.COMPLETED);
+        task.setAcceptResult("PASS");
+        stateMachine.transitionStatus(task, "ACCEPT_PASS", "验收通过", oldStatus, newStatus);
+        updateById(task);
 
         return Result.success(task);
     }
@@ -251,12 +261,12 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (!UserContext.isLeader() && !task.getCreatorId().equals(UserContext.getUserId())) {
+        if (!isTaskCreatorOrLeader(task)) {
             return Result.error("只有负责人或管理员可以驳回任务");
         }
 
-        if (!TaskStatus.PENDING_ACCEPT.equals(task.getTaskStatus())) {
-            return Result.error("只有待验收状态的任务可以驳回");
+        if (!stateMachine.canAcceptReject(task)) {
+            return Result.error("只有待验收状态的任务可以驳回，当前状态：" + stateMachine.getStatusText(task.getTaskStatus()));
         }
 
         if (!StringUtils.hasText(dto.getRejectReason())) {
@@ -264,19 +274,13 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
         }
 
         String oldStatus = task.getTaskStatus();
-        task.setTaskStatus(TaskStatus.REJECTED);
+        String newStatus = stateMachine.getNextStatusAfterAcceptReject();
+
         task.setAcceptResult("REJECT");
+        stateMachine.transitionStatus(task, "ACCEPT_REJECT", "验收驳回", oldStatus, newStatus);
         updateById(task);
 
-        TaskRejectRecord rejectRecord = new TaskRejectRecord();
-        rejectRecord.setTaskId(task.getId());
-        rejectRecord.setRejectReason(dto.getRejectReason());
-        rejectRecord.setRejectById(UserContext.getUserId());
-        rejectRecord.setRejectByName(UserContext.getUserName());
-        rejectRecordService.save(rejectRecord);
-
-        operationLogService.logOperation(task.getId(), "ACCEPT_REJECT", "验收驳回", oldStatus, TaskStatus.REJECTED);
-        operationLogService.logRejectReason(task.getId(), dto.getRejectReason());
+        stateMachine.logRejectRecord(task.getId(), dto.getRejectReason());
 
         return Result.success(task);
     }
@@ -288,8 +292,12 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             return Result.error("任务不存在");
         }
 
-        if (!UserContext.isLeader() && !task.getCreatorId().equals(UserContext.getUserId())) {
+        if (!isTaskCreatorOrLeader(task)) {
             return Result.error("只有负责人或管理员可以修改任务信息");
+        }
+
+        if (TaskStatus.COMPLETED.equals(task.getTaskStatus())) {
+            return Result.error("已完成的任务不能修改基础信息");
         }
 
         if (dto.getStartDate() != null && dto.getEndDate() != null) {
@@ -336,9 +344,6 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
         if (StringUtils.hasText(dto.getTaskStatus())) {
             wrapper.eq(Task::getTaskStatus, dto.getTaskStatus());
         }
-        if (dto.getIsOverdue() != null) {
-            wrapper.eq(Task::getIsOverdue, dto.getIsOverdue());
-        }
         if (dto.getStartDateBegin() != null) {
             wrapper.ge(Task::getStartDate, dto.getStartDateBegin());
         }
@@ -350,6 +355,18 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
         }
         if (dto.getEndDateEnd() != null) {
             wrapper.le(Task::getEndDate, dto.getEndDateEnd());
+        }
+
+        if (dto.getIsOverdue() != null) {
+            LocalDate today = LocalDate.now();
+            if (dto.getIsOverdue() == 1) {
+                wrapper.and(w -> w.ne(Task::getTaskStatus, TaskStatus.COMPLETED)
+                        .lt(Task::getEndDate, today));
+            } else {
+                wrapper.and(w -> w.eq(Task::getTaskStatus, TaskStatus.COMPLETED)
+                        .or().ge(Task::getEndDate, today)
+                        .or().isNull(Task::getEndDate));
+            }
         }
 
         if (!UserContext.isLeader() && !"ADMIN".equals(UserContext.getUserRole())) {
@@ -434,8 +451,9 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
             LocalDate today = LocalDate.now();
             boolean isOverdue = today.isAfter(task.getEndDate());
             task.setIsOverdue(isOverdue ? 1 : 0);
-            if (isOverdue) {
+            if (isOverdue && (task.getWasOverdue() == null || task.getWasOverdue() == 0)) {
                 task.setWasOverdue(1);
+                updateById(task);
             }
         }
     }
@@ -452,5 +470,78 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
                 .list();
 
         return Result.success(logs);
+    }
+
+    private boolean isTaskCreatorOrLeader(Task task) {
+        return UserContext.isLeader() || task.getCreatorId().equals(UserContext.getUserId());
+    }
+
+    private boolean isTaskExecutor(Task task) {
+        return task.getExecutorId() != null && task.getExecutorId().equals(UserContext.getUserId());
+    }
+
+    @Transactional
+    public Result<Task> dragUpdateStatus(TaskDragDTO dto) {
+        Task task = getById(dto.getTaskId());
+        if (task == null) {
+            return Result.error("任务不存在");
+        }
+
+        if (TaskStatus.COMPLETED.equals(task.getTaskStatus())) {
+            return Result.error("已完成的任务不能通过拖拽变更状态");
+        }
+
+        if (!stateMachine.canDragToStatus(task, dto.getTargetStatus())) {
+            return Result.error("不允许从 " + stateMachine.getStatusText(task.getTaskStatus())
+                    + " 拖拽到 " + stateMachine.getStatusText(dto.getTargetStatus()));
+        }
+
+        if (stateMachine.isLeaderOperation(dto.getTargetStatus())) {
+            if (!isTaskCreatorOrLeader(task)) {
+                return Result.error("只有负责人或管理员可以拖拽到 " + stateMachine.getStatusText(dto.getTargetStatus()) + " 状态");
+            }
+        }
+
+        if (stateMachine.isExecutorOperation(dto.getTargetStatus())) {
+            if (!isTaskExecutor(task)) {
+                return Result.error("只有任务执行人可以拖拽到 " + stateMachine.getStatusText(dto.getTargetStatus()) + " 状态");
+            }
+        }
+
+        if (TaskStatus.REJECTED.equals(dto.getTargetStatus()) && !StringUtils.hasText(dto.getRejectReason())) {
+            return Result.error("拖拽到已驳回状态必须填写驳回原因");
+        }
+
+        if (TaskStatus.PENDING_ACCEPT.equals(dto.getTargetStatus())) {
+            if (task.getProgress() == null || task.getProgress() < 100) {
+                return Result.error("任务进度必须达到100%才能拖拽到待验收，当前进度：" + (task.getProgress() != null ? task.getProgress() : 0) + "%");
+            }
+        }
+
+        String oldStatus = task.getTaskStatus();
+        String newStatus = dto.getTargetStatus();
+        String operationType = stateMachine.getDragOperationType(newStatus);
+        String operationContent = stateMachine.getDragOperationContent(newStatus);
+
+        if (TaskStatus.COMPLETED.equals(newStatus)) {
+            task.setAcceptResult("PASS");
+        } else if (TaskStatus.REJECTED.equals(newStatus)) {
+            task.setAcceptResult("REJECT");
+        }
+
+        if (TaskStatus.IN_PROGRESS.equals(newStatus) && (task.getProgress() == null || task.getProgress() == 0)) {
+            task.setProgress(1);
+        }
+
+        stateMachine.transitionStatus(task, operationType, operationContent, oldStatus, newStatus);
+        updateById(task);
+
+        if (TaskStatus.REJECTED.equals(newStatus)) {
+            stateMachine.logRejectRecord(task.getId(), dto.getRejectReason());
+        }
+
+        checkOverdue(task);
+
+        return Result.success(task);
     }
 }

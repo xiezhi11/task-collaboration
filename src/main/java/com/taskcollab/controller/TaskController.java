@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.taskcollab.common.Result;
 import com.taskcollab.dto.TaskAcceptDTO;
 import com.taskcollab.dto.TaskCreateDTO;
+import com.taskcollab.dto.TaskDragDTO;
 import com.taskcollab.dto.TaskProgressDTO;
 import com.taskcollab.dto.TaskQueryDTO;
 import com.taskcollab.dto.TaskUpdateDTO;
@@ -84,5 +85,10 @@ public class TaskController {
     @GetMapping("/{taskId}/logs")
     public Result<List<TaskOperationLog>> getOperationLogs(@PathVariable Long taskId) {
         return taskService.getOperationLogs(taskId);
+    }
+
+    @PostMapping("/drag")
+    public Result<Task> dragUpdateStatus(@Valid @RequestBody TaskDragDTO dto) {
+        return taskService.dragUpdateStatus(dto);
     }
 }
