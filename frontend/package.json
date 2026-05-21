@@ -3,19 +3,22 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "serve": "vue-cli-service serve",
-    "build": "vue-cli-service build"
+    "serve": "vite --host 0.0.0.0 --port 8081",
+    "dev": "vite --host 0.0.0.0 --port 8081",
+    "build": "vite build"
   },
   "dependencies": {
-    "vue": "^3.3.0",
-    "vue-router": "^4.2.0",
-    "element-plus": "^2.4.0",
     "@element-plus/icons-vue": "^2.3.0",
     "axios": "^1.6.0",
-    "dayjs": "^1.11.0"
+    "dayjs": "^1.11.0",
+    "element-plus": "^2.4.0",
+    "sortablejs": "^1.15.7",
+    "vue": "^3.3.0",
+    "vue-router": "^4.2.0",
+    "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
-    "@vue/cli-service": "^5.0.0",
-    "sass": "^1.69.0"
+    "@vitejs/plugin-vue": "5.2.4",
+    "vite": "5.4.21"
   }
 }
